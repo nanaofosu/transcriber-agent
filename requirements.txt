@@ -1,0 +1,7 @@
+openai>=1.0
+whisper
+ffmpeg-python
+google-cloud-speech
+python-docx
+pydub
+tqdm
