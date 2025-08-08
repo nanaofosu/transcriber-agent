@@ -77,7 +77,7 @@ def preprocess_audio(
             "ffmpeg-python package or skip preprocessing."
         )
     (
-        ffmpeg.input(input_path)
+   ffmpeg.input(input_path).audio
         .output(
             output_path,
             format="wav",
