@@ -42,80 +42,70 @@ from output.formatter import (
 
 
 def run_transcription(
-    uploaded_file: st.runtime.uploaded_file_manager.UploadedFile,
+    uploaded_file: Any,  # or IO[bytes]
     use_diarization: bool,
     generate_summ: bool,
     output_format: str,
 ) -> Tuple[str, Optional[bytes]]:
-    """Handle the end-to-end transcription workflow for the uploaded file.
+    # Persist uploaded file to a temporary location
+    suffix = os.path.splitext(uploaded_file.name)[1]
+    tmp_path = None
+    preprocessed_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(uploaded_file.read())
+            tmp_path = tmp.name
 
-    Parameters
-    ----------
-    uploaded_file:
-        The file object received from Streamlit's uploader.
-    use_diarization:
-        Whether to enable speaker diarisation (Google STT).
-    generate_summ:
-        Whether to generate a summary via OpenAI.
-    output_format:
-        The desired output format ('txt', 'md', 'srt', 'docx').
+        preprocessed_path = preprocess_audio(tmp_path)
+        result = transcribe(preprocessed_path, use_diarization=use_diarization)
+        transcript = result.get("text", "")
 
-    Returns
-    -------
-    Tuple[str, Optional[bytes]]
-        The formatted transcript and, for DOCX outputs, the binary data for
-        downloading.  For other formats the second element will be ``None``.
-    """
-    # Persist uploaded file to a temporary location because the core
-    # transcription modules expect a file path on disk.
-    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp:
-        tmp.write(uploaded_file.read())
-        tmp_path = tmp.name
+        summary_dict = None
+        if generate_summ:
+            summary_dict = generate_summary(transcript)
 
-    # Preprocess audio to a normalised WAV file; this will also extract audio from videos.
-    preprocessed_path = preprocess_audio(tmp_path)
+        binary_data: Optional[bytes] = None
+        if output_format == "txt":
+            formatted = format_plain_text(transcript)
+        elif output_format == "md":
+            formatted = format_markdown(transcript)
+        elif output_format == "srt":
+            segments = result.get("segments", [])
+            formatted = format_srt(segments) if segments else format_plain_text(transcript)
+        elif output_format == "docx":
+            doc = format_docx(transcript)
+            buffer = io.BytesIO()
+            doc.save(buffer)
+            binary_data = buffer.getvalue()
+            formatted = "(DOCX file generated)"
+        else:
+            formatted = transcript
 
-    # Dispatch to the appropriate backend.
-    result = transcribe(preprocessed_path, use_diarization=use_diarization)
-    transcript = result.get("text", "")
+        # Append summary
+        if summary_dict and (summary_dict.get("key_takeaways") or summary_dict.get("action_items")):
+            formatted += "\n\n---\n**Summary**\n"
+            if summary_dict.get("key_takeaways"):
+                formatted += "\n**Key Takeaways:**\n"
+                for item in summary_dict["key_takeaways"]:
+                    formatted += f"- {item}\n"
+            if summary_dict.get("action_items"):
+                formatted += "\n**Action Items:**\n"
+                for item in summary_dict["action_items"]:
+                    formatted += f"- {item}\n"
 
-    # Generate summary if requested.
-    summary_dict = None
-    if generate_summ:
-        summary_dict = generate_summary(transcript)
+        return formatted, binary_data
 
-    # Format transcript according to user selection.
-    binary_data: Optional[bytes] = None
-    if output_format == "txt":
-        formatted = format_plain_text(transcript)
-    elif output_format == "md":
-        formatted = format_markdown(transcript)
-    elif output_format == "srt":
-        segments = result.get("segments", [])
-        formatted = format_srt(segments) if segments else format_plain_text(transcript)
-    elif output_format == "docx":
-        doc = format_docx(transcript)
-        buffer = io.BytesIO()
-        doc.save(buffer)
-        binary_data = buffer.getvalue()
-        formatted = "(DOCX file generated)"
-    else:
-        formatted = transcript
-
-    # Append summary to the displayed transcript for convenience.
-    if summary_dict and (summary_dict.get("key_takeaways") or summary_dict.get("action_items")):
-        formatted += "\n\n---\n**Summary**\n"
-        if summary_dict.get("key_takeaways"):
-            formatted += "\n**Key Takeaways:**\n"
-            for item in summary_dict["key_takeaways"]:
-                formatted += f"- {item}\n"
-        if summary_dict.get("action_items"):
-            formatted += "\n**Action Items:**\n"
-            for item in summary_dict["action_items"]:
-                formatted += f"- {item}\n"
-
-    return formatted, binary_data
-
+    except Exception as e:
+        # Bubble a friendly message to the caller/UI
+        return f"An error occurred during transcription: {e}", None
+    finally:
+        # Clean up temporary files
+        for p in (preprocessed_path, tmp_path):
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
 
 def main() -> None:
     st.set_page_config(page_title="Transcriber Agent", layout="wide")
@@ -150,7 +140,6 @@ def main() -> None:
                     output_format=output_format,
                 )
             if output_format == "docx" and binary_data is not None:
-                st.success("Transcription complete. Download your DOCX file below.")
                 st.download_button(
                     label="Download DOCX",
                     data=binary_data,
@@ -159,14 +148,20 @@ def main() -> None:
                 )
             else:
                 st.success("Transcription complete.")
-                st.text_area(
-                    "Transcript", formatted, height=400, help="The generated transcript."
-                )
+                if output_format == "md":
+                    st.markdown(formatted)
+                else:
+                    st.text_area("Transcript", formatted, height=400, help="The generated transcript.")
+                mime = {
+                    "txt": "text/plain",
+                    "md": "text/markdown",
+                    "srt": "application/x-subrip",
+                }.get(output_format, "text/plain")
                 st.download_button(
                     label="Download Transcript",
                     data=formatted,
                     file_name=f"{os.path.splitext(uploaded_file.name)[0]}_transcript.{output_format}",
-                    mime="text/plain",
+                    mime=mime,
                 )
 
 
