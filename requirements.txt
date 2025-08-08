@@ -1,5 +1,5 @@
 openai>=1.0
-whisper
+openai-whisper
 ffmpeg-python
 google-cloud-speech
 python-docx
