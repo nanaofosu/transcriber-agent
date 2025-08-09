@@ -6,3 +6,5 @@ python-docx
 pydub
 tqdm
 streamlit
+google-cloud-storage
+google-auth
