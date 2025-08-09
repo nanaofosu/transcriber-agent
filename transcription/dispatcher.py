@@ -1,38 +1,41 @@
-"""Logic for selecting an appropriate transcription backend.
-
-The :func:`transcribe` function defined here is the single entry point used
-by the CLI and other modules to perform speech recognition.  It dispatches
-requests to either the Whisper or the Google transcriber based on the
-``use_diarization`` flag supplied by the caller.  Additional dispatch logic
-could be added here to support other backends or heuristics in the future.
-"""
+"""Google Cloud Speech–to–Text integration with speaker diarisation (GCS + LRO)."""
 
 from __future__ import annotations
 
+import os
 from typing import Dict, Any
 
 from .whisper_transcriber import transcribe_whisper
 from .google_transcriber import transcribe_google
 
 
-def transcribe(audio_path: str, use_diarization: bool = False) -> Dict[str, Any]:
-    """Transcribe an audio recording.
-
-    Parameters
-    ----------
-    audio_path:
-        Path to the audio file to transcribe.
-    use_diarization:
-        When ``True`` the function will use the Google Speech‑to‑Text API with
-        speaker diarisation enabled.  Otherwise it will use the Whisper model.
-
-    Returns
-    -------
-    dict
-        A dictionary containing at least the key ``text`` with the full
-        transcript.  Whisper results additionally include ``segments`` and
-        ``language``, whereas Google results include ``full_response``.
+def transcribe(
+    audio_path: str,
+    use_diarization: bool = False,
+    *,
+    # keep these tweakable so you don't hardcode in the GCS module
+    language_code: str = "en-US",
+    sample_rate_hz: int = 16000,   # must match your preprocess_audio output
+    min_speakers: int = 2,
+    max_speakers: int = 6,
+) -> Dict[str, Any]:
+    """
+    Transcribe an audio recording. When `use_diarization` is True, use Google STT
+    via LongRunningRecognize with a GCS URI; otherwise use Whisper.
     """
     if use_diarization:
-        return transcribe_google(audio_path)
+        gcs_bucket = "my-transcriber-temp-bucket"
+        if not gcs_bucket:
+            # Optional: soft-fail to Whisper instead of raising
+            raise RuntimeError("GCS_BUCKET not set. Set env var or pass a bucket to use diarization.")
+        return transcribe_google(
+            audio_path,
+            gcs_bucket=gcs_bucket,
+            language_code=language_code,
+            sample_rate_hz=sample_rate_hz,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+            delete_after=True,
+        )
+
     return transcribe_whisper(audio_path)
